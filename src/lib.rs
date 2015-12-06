@@ -100,16 +100,25 @@ impl <T: PartialEq + HasName + ::std::fmt::Debug, U : PartialEq> NodeInfo<T, U> 
     }
 }
 
-//
-// #[derive(Clone, Debug, PartialEq, Eq)]
-// pub struct RoutingNode {
-//     node_info : NodeInfo<T,U>,
-//     bucket_index : usize
-// }
+// Internal struct for routing
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RoutingNode<T, U> {
+    node_info : NodeInfo<T,U>,
+    bucket_index : usize
+}
+
+impl <T,U>RoutingNode<T,U> {
+    fn new(node_info: NodeInfo<T,U>, bucket_index: usize) -> RoutingNode<T,U> {
+       RoutingNode {
+            node_info : node_info,
+            bucket_index : bucket_index,
+       }
+    }
+}
 
 /// The RoutingTable class is used to maintain a list of contacts to which the node is connected.
 pub struct RoutingTable<T, U> {
-    nodes: Vec<NodeInfo<T,U>>,
+    nodes: Vec<RoutingNode<T,U>>,
     our_name: ::xor_name::XorName,
 }
 
@@ -141,24 +150,14 @@ impl <T : PartialEq + HasName + ::std::fmt::Debug + ::std::clone::Clone,
             return (true, None)
         }
 
-        if ::xor_name::closer_to_target(their_info.name(),
-                                         self.nodes[GROUP_SIZE].name(),
-                                         &self.our_name) {
-            self.push_back_then_sort(their_info);
-            return match self.find_candidate_for_removal() {
-                None => (true, None),
-                Some(node_index) => (true, Some(self.nodes.remove(node_index))),
-            }
+        // we add only if this node is better than any node we currently have
+        if let Some(possible_remove) = self.find_candidate_for_removal(&their_info.name()) {
+            // self.nodes.retain(|x| x != remove);
+            // self.push_back_then_sort(their_info);
+            return (true, Some(possible_remove.node_info.clone()));
+        } else {
+            return (false, None);
         }
-
-        let removal_node_index = self.find_candidate_for_removal();
-        if self.new_node_is_better_than_existing(their_info.name(), removal_node_index) {
-            let removal_node = self.nodes.remove(removal_node_index.unwrap());
-            self.push_back_then_sort(their_info);
-            return (true, Some(removal_node))
-        }
-
-        (false, None)
     }
 
     /// Adds a connection to an existing entry.  Should be called after `has_node`. The return
@@ -166,13 +165,13 @@ impl <T : PartialEq + HasName + ::std::fmt::Debug + ::std::clone::Clone,
     pub fn add_connection(&mut self,
                           their_name: &::xor_name::XorName,
                           connection: U) -> bool {
-        match self.nodes.iter_mut().find(|node_info| node_info.name() == their_name) {
-            Some(mut node_info) => {
-                if node_info.connections.iter().any(|elt| *elt == connection) {
+        match self.nodes.iter_mut().find(|node| node.node_info.name() == their_name) {
+            Some(mut node) => {
+                if node.node_info.connections.iter().any(|elt| *elt == connection) {
                     return false
                 }
 
-                node_info.connections.push(connection);
+                node.node_info.connections.push(connection);
                 true
             },
             None => {
@@ -195,15 +194,22 @@ impl <T : PartialEq + HasName + ::std::fmt::Debug + ::std::clone::Clone,
             return true
         }
         let group_len = GROUP_SIZE - 1;
-        if ::xor_name::closer_to_target(their_name, self.nodes[group_len].name(), &self.our_name) {
+        if ::xor_name::closer_to_target(their_name,
+                                        self.nodes[group_len].node_info.name(),
+                                        &self.our_name) {
             return true
         }
-        self.new_node_is_better_than_existing(&their_name, self.find_candidate_for_removal())
+
+        if let Some(possible_remove) = self.find_candidate_for_removal(&their_name) {
+            true
+        } else {
+            false
+        }
     }
 
     /// This unconditionally removes the contact from the table.
     pub fn drop_node(&mut self, node_to_drop: &::xor_name::XorName) {
-        self.nodes.retain(|node_info| node_info.name() != node_to_drop);
+        self.nodes.retain(|node| node.node_info.name() != node_to_drop);
     }
 
     /// This should be called when a connection has dropped.  If the
@@ -211,19 +217,19 @@ impl <T : PartialEq + HasName + ::std::fmt::Debug + ::std::clone::Clone,
     /// routing table and its name is returned.  If the entry still has at least one connection, or
     /// an entry cannot be found for 'lost_connection', the function returns 'None'.
     pub fn drop_connection(&mut self, lost_connection: &U) -> Option<::xor_name::XorName> {
-        let remove_connection = |node_info: &mut NodeInfo<T,U>| {
-            if let Some(index) = node_info.connections
+        let remove_connection = |node: &mut RoutingNode<T,U>| {
+            if let Some(index) = node.node_info.connections
                                           .iter()
                                           .position(|connection| connection == lost_connection) {
-                let _ = node_info.connections.remove(index);
+                let _ = node.node_info.connections.remove(index);
                 true
             } else {
                 false
             }
         };
         if let Some(node_index) = self.nodes.iter_mut().position(remove_connection) {
-            if self.nodes[node_index].connections.is_empty() {
-               return Some(self.nodes.remove(node_index).name().clone())
+            if self.nodes[node_index].node_info.connections.is_empty() {
+               return Some(self.nodes.remove(node_index).node_info.name().clone())
             }
         }
         None
@@ -240,14 +246,16 @@ impl <T : PartialEq + HasName + ::std::fmt::Debug + ::std::clone::Clone,
         }
 
         // if not in close group but connected then send direct
-        if let Some(ref found) = self.nodes.iter().find(|ref node| node.name() == target) {
-            return vec![(*found).clone()]
+        if let Some(ref found) = self.nodes.iter().find(|ref node| node.node_info.name() == target) {
+            return vec![(*found).node_info.clone()]
         }
 
         // not in close group or routing table so send to closest known nodes up to parallelism
         // count
         self.nodes.iter()
-               .sorted_by(|a, b| if ::xor_name::closer_to_target(&a.name(), &b.name(), &target) {
+               .sorted_by(|a, b| if ::xor_name::closer_to_target(&a.node_info.name(),
+                                                                 &b.node_info.name(),
+                                                                 &target) {
                                      ::std::cmp::Ordering::Less
                                  } else {
                                      ::std::cmp::Ordering::Greater
@@ -255,13 +263,15 @@ impl <T : PartialEq + HasName + ::std::fmt::Debug + ::std::clone::Clone,
                .into_iter()
                .cloned()
                .take(PARALLELISM)
-               .collect::<Vec<_>>()
+               .into_iter()
+               .map(|x| x.node_info)
+               .collect_vec()
     }
 
     /// This returns our close group, i.e. the 'GROUP_SIZE' contacts closest to our name (or the
     /// entire table if we hold less than 'GROUP_SIZE' contacts in total) sorted by closeness to us.
     pub fn our_close_group(&self) -> Vec<NodeInfo<T, U>> {
-        self.nodes.iter().take(GROUP_SIZE).cloned().collect()
+        self.nodes.iter().take(GROUP_SIZE).cloned().map(|x| x.node_info).collect_vec()
     }
 
     /// This returns true if the provided name is closer than or equal to the furthest node in our
@@ -269,7 +279,9 @@ impl <T : PartialEq + HasName + ::std::fmt::Debug + ::std::clone::Clone,
     /// considered to be close.
     pub fn is_close(&self, name: &::xor_name::XorName) -> bool {
         match self.nodes.iter().nth(GROUP_SIZE - 1) {
-            Some(node) => ::xor_name::closer_to_target_or_equal(name, node.name(), &self.our_name),
+            Some(node) => ::xor_name::closer_to_target_or_equal(name,
+                                                                node.node_info.name(),
+                                                                &self.our_name),
             None => true
         }
     }
@@ -288,57 +300,31 @@ impl <T : PartialEq + HasName + ::std::fmt::Debug + ::std::clone::Clone,
     }
     /// check is routing table contains name
     pub fn has_node(&self, name: &::xor_name::XorName) -> bool {
-        self.nodes.iter().any(|node_info| node_info.name() == name)
+        self.nodes.iter().any(|node| node.node_info.name() == name)
     }
 
-    // fn furthest_close_node(&self) -> Option<&NodeInfo<T, U>> {
-    //     match self.nodes.iter().nth(GROUP_SIZE - 1) {
-    //         Some(node) => Some(node),
-    //         None => self.nodes.last()
-    //     }
-    // }
+    fn furthest_close_node(&self) -> Option<&NodeInfo<T, U>> {
+        match self.nodes.iter().nth(GROUP_SIZE - 1) {
+            Some(node) => Some(&node.node_info),
+            None => self.nodes.last().map(|x| &x.node_info)
+        }
+    }
 
     // This effectively reverse iterates through all non-empty buckets (i.e. starts at furthest
     // bucket from us) checking for overfilled ones and returning the table index of the furthest
     // contact within that bucket.  No contacts within our close group will be considered.
-    fn find_candidate_for_removal(&self) -> Option<usize> {
+    fn find_candidate_for_removal(&self, name: &::xor_name::XorName) -> Option<&RoutingNode<T, U>> {
         assert!(self.nodes.len() >= OPTIMAL_TABLE_SIZE);
+        let it = self.nodes.iter().rev();
+        let their_bucket_index = self.bucket_index(name);
+        let count = 0;
 
-        let mut number_in_bucket = 0usize;
-        let mut current_bucket = 0usize;
-
-        // Start iterating from the end, i.e. the furthest from our ID.
-        let mut counter = self.nodes.len() - 1;
-        let mut furthest_in_this_bucket = counter;
-
-        // Stop iterating at our furthest close group member since we won't remove any peer in our
-        // close group
-        let finish = GROUP_SIZE;
-
-        while counter >= finish {
-            let bucket_index = self.bucket_index(self.nodes[counter].name());
-
-            // If we're entering a new bucket, reset details.
-            if bucket_index != current_bucket {
-                current_bucket = bucket_index;
-                number_in_bucket = 0;
-                furthest_in_this_bucket = counter;
-            }
-
-            // Check for an excess of contacts in this bucket.
-            number_in_bucket += 1;
-            if number_in_bucket > BUCKET_SIZE {
-                break;
-            }
-
-            counter -= 1;
-        }
-
-        if counter < finish {
-            None
-        } else {
-            Some(furthest_in_this_bucket)
-        }
+        // while *it.node_info.name() != self.furthest_close_node() || it.next() < it.last() {
+        //   count += 1;
+        //   if *it.bucket_index != their_bucket_index { count = 1; continue; }
+        //   if count > BUCKET_SIZE { return *it.name_info.name() }
+        // }
+    None
     }
 
     // This is equivalent to the common leading bits of `self.our_name` and `name` where "leading
@@ -351,36 +337,25 @@ impl <T : PartialEq + HasName + ::std::fmt::Debug + ::std::clone::Clone,
         {  // Try to find and update an existing entry
             if let Some(mut entry) = self.nodes
                                          .iter_mut()
-                                         .find(|element| element.name() == node_info.name()) {
-                entry.connections.extend(node_info.connections);
+                                         .find(|element| element.node_info.name() == node_info.name()) {
+                entry.node_info.connections.extend(node_info.connections);
                 return
             }
         }
         // We didn't find an existing entry, so insert a new one
-        self.nodes.push(node_info);
+        let bucket = self.bucket_index(&node_info.name());
+        self.nodes.push(RoutingNode::new(node_info, bucket));
         let our_name = &self.our_name;
         self.nodes.sort_by(
-            |lhs, rhs| if ::xor_name::closer_to_target(lhs.name(), rhs.name(), our_name) {
+            |lhs, rhs| if ::xor_name::closer_to_target(lhs.node_info.name(),
+                                                       rhs.node_info.name(),
+                                                       our_name) {
                            ::std::cmp::Ordering::Less
                        } else {
                            ::std::cmp::Ordering::Greater
                        });
     }
 
-    // Returns true if 'removal_node_index' is Some and the new node is in a closer bucket than the
-    // removal candidate.
-    fn new_node_is_better_than_existing(&self,
-                                        new_node: &::xor_name::XorName,
-                                        removal_node_index: Option<usize>)
-                                        -> bool {
-        match removal_node_index {
-            Some(index) => {
-                let removal_node = &self.nodes[index];
-                self.bucket_index(new_node) > self.bucket_index(removal_node.name())
-            },
-            None => false,
-        }
-    }
 }
 
 
