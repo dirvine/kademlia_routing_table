@@ -1,5 +1,16 @@
 # kademlia_routing_table - Change Log
 
+## [0.5.1]
+- Extend the API to facilitate finding unneeded connections and querying bucket
+  sizes.
+
+## [0.5.0]
+- Add functionality to detect unneeded routing table entries, so that
+  unnecessarily large numbers of connections can be avoided.
+
+## [0.4.1]
+- Don't block re-swarming messages and set `PARALLELISM` to 8.
+
 ## [0.4.0]
 - Made `closest_nodes_to` public.
 - Updated dependencies.
