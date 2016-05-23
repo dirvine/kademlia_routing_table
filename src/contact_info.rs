@@ -15,10 +15,21 @@
 // Please review the Licences for the specific language governing permissions and limitations
 // relating to use of the SAFE Network Software.
 
-use xor_name::XorName;
+use xorable::Xorable;
 
 /// Contact info about a node in the network.
 pub trait ContactInfo: Clone + Eq {
+    /// The type of node names. This should implement the `Xorable` trait.
+    type Name;
+
     /// Returns the name of this contact.
-    fn name(&self) -> &XorName;
+    fn name(&self) -> &Self::Name;
+}
+
+impl<T: Xorable + Clone + Eq> ContactInfo for T {
+    type Name = Self;
+
+    fn name(&self) -> &Self {
+        self
+    }
 }

@@ -7,12 +7,11 @@ license = "GPL-3.0"
 name = "kademlia_routing_table"
 readme = "README.md"
 repository = "https://github.com/maidsafe/kademlia_routing_table"
-version = "0.5.1"
+version = "0.5.2"
 
 [dependencies]
-clippy = {version = "~0.0.63", optional = true}
-itertools = "~0.4.13"
-log = "~0.3.6"
-maidsafe_utilities = "~0.5.3"
+clippy = {version = "~0.0.67", optional = true}
+itertools = "~0.4.15"
+
+[dev-dependencies]
 rand = "~0.3.14"
-xor_name = "~0.1.0"
